@@ -1,0 +1,1477 @@
+{
+  "name": "Invoice Processing – Main",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Submit an Invoice",
+        "formDescription": "Upload a vendor invoice (PDF). It will be read, checked, and logged to the Invoice Register automatically.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Invoice PDF",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".pdf",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Your Email",
+              "fieldType": "email",
+              "placeholder": "you@company.com",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Notes",
+              "fieldType": "textarea",
+              "placeholder": "Optional: PO number, project, anything AP should know"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "buttonLabel": "Submit Invoice",
+          "path": "submit-invoice",
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Thanks! Your invoice was received and is being processed."
+            }
+          }
+        }
+      },
+      "id": "4fd3c21f-6eff-4b17-9709-945fde728fca",
+      "name": "Upload Invoice Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Makes form uploads and email attachments look identical downstream.\n// Output: one item per PDF, file always in binary \"data\".\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const isEmail = !!(j.threadId || j.from || j.headers);\n  const source = isEmail ? 'email' : 'form';\n  const sender = isEmail\n    ? (j.from?.value?.[0]?.address || j.from?.text || '')\n    : (j['Your Email'] || '');\n  const receivedAt = isEmail\n    ? (j.date ? new Date(j.date).toISOString() : new Date().toISOString())\n    : (j.submittedAt ? new Date(j.submittedAt).toISOString() : new Date().toISOString());\n\n  const files = item.binary || {};\n  for (const key of Object.keys(files)) {\n    const f = files[key];\n    const name = f.fileName || key;\n    const isPdf = (f.mimeType || '').toLowerCase().includes('pdf') || name.toLowerCase().endsWith('.pdf');\n    if (!isPdf) continue; // skip logos, signatures, other attachments\n\n    out.push({\n      json: {\n        source,\n        sender,\n        email_subject: isEmail ? (j.subject || '') : '',\n        email_message_id: isEmail ? (j.id || '') : '',\n        submitter_notes: isEmail ? '' : (j['Notes'] || ''),\n        file_name: name,\n        received_at: receivedAt\n      },\n      binary: { data: f }\n    });\n  }\n}\nreturn out;"
+      },
+      "id": "ed2dc8d8-b931-4612-a088-e890579be780",
+      "name": "Normalize Intake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "maxResults": 1,
+        "filters": {
+          "q": "subject:invoice has:attachment filename:pdf -label:invoice-processed",
+          "readStatus": "both"
+        },
+        "options": {
+          "dataPropertyAttachmentsPrefixName": "attachment_",
+          "downloadAttachments": true
+        }
+      },
+      "id": "a81941bc-265b-4a0b-8e3a-eb9611a5b5d5",
+      "name": "Watch Invoice Inbox",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        224
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {
+          "joinPages": true,
+          "keepSource": "both",
+          "maxPages": 5
+        }
+      },
+      "id": "025e119e-f1fb-4a3a-8fb9-50ea414fd2a9",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        512,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ ($json.text || \"\").trim().length }}",
+              "rightValue": 30,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b767dc03-8804-4dcb-9797-bc28fadecb5c",
+      "name": "Has Readable Text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        752,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src",
+              "name": "source",
+              "value": "={{ $('Normalize Intake').item.json.source }}",
+              "type": "string"
+            },
+            {
+              "id": "snd",
+              "name": "sender",
+              "value": "={{ $('Normalize Intake').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "fn",
+              "name": "file_name",
+              "value": "={{ $('Normalize Intake').item.json.file_name }}",
+              "type": "string"
+            },
+            {
+              "id": "rcv",
+              "name": "received_at",
+              "value": "={{ $('Normalize Intake').item.json.received_at }}",
+              "type": "string"
+            },
+            {
+              "id": "mid",
+              "name": "email_message_id",
+              "value": "={{ $('Normalize Intake').item.json.email_message_id }}",
+              "type": "string"
+            },
+            {
+              "id": "nts",
+              "name": "submitter_notes",
+              "value": "={{ $('Normalize Intake').item.json.submitter_notes }}",
+              "type": "string"
+            },
+            {
+              "id": "txt",
+              "name": "invoice_text",
+              "value": "={{ $json.text.trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "pgs",
+              "name": "page_count",
+              "value": "={{ $json.numpages }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "907de3fd-a432-49a1-a650-fc2bd839242e",
+      "name": "Ready for AI Extraction",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        992,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src2",
+              "name": "source",
+              "value": "={{ $('Normalize Intake').item.json.source }}",
+              "type": "string"
+            },
+            {
+              "id": "snd2",
+              "name": "sender",
+              "value": "={{ $('Normalize Intake').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "fn2",
+              "name": "file_name",
+              "value": "={{ $('Normalize Intake').item.json.file_name }}",
+              "type": "string"
+            },
+            {
+              "id": "rcv2",
+              "name": "received_at",
+              "value": "={{ $('Normalize Intake').item.json.received_at }}",
+              "type": "string"
+            },
+            {
+              "id": "mid2",
+              "name": "email_message_id",
+              "value": "={{ $('Normalize Intake').item.json.email_message_id }}",
+              "type": "string"
+            },
+            {
+              "id": "st2",
+              "name": "status",
+              "value": "Needs Review",
+              "type": "string"
+            },
+            {
+              "id": "rsn2",
+              "name": "review_reason",
+              "value": "No readable text (likely a scanned/image PDF). Manual entry required.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "2351b686-6daf-45cc-bc45-e98d1f9bba05",
+      "name": "Flag: Scanned / No Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        992,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1. Intake\nTwo ways in: the web form, or email (subject contains \"invoice\" + PDF attached).\n**Normalize Intake** makes both look the same: one item per PDF, file in binary `data`.\n\nProcessed emails get the Gmail label `invoice-processed`, so the same email is never processed twice.",
+        "color": 7
+      },
+      "id": "a53567e3-35d2-4a65-a6ef-27ca207142c0",
+      "name": "Sticky Note 94d16f69",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        144,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Read the PDF\nExtract the text. Under 30 characters = a scanned/image PDF: it is NOT sent to AI, it goes to Needs Review for manual entry.",
+        "color": 5
+      },
+      "id": "11a9a96e-7305-411b-b1b1-4a123ed87d24",
+      "name": "Sticky Note e28acf0e",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        144,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Invoice text:\n\n{{ $json.invoice_text }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You extract data from vendor invoices for an accounts payable system.\n\nReturn ONLY a JSON object with exactly these keys:\n{\n  \"vendor_name\": string|null,\n  \"invoice_number\": string|null,\n  \"invoice_date\": \"YYYY-MM-DD\"|null,\n  \"due_date\": \"YYYY-MM-DD\"|null,\n  \"currency\": \"USD\"|string|null,\n  \"subtotal\": number|null,\n  \"tax\": number|null,\n  \"total\": number|null,\n  \"line_items_summary\": string|null,\n  \"category\": one of the categories below,\n  \"confidence\": \"high\"|\"medium\"|\"low\"\n}\n\nRules:\n1. Copy values exactly as printed. NEVER guess or invent a value.\n2. If a field is not printed on the invoice, return null. Do not make up an invoice number.\n3. vendor_name = the company that ISSUED the invoice (the seller), never the customer in the Bill To section.\n4. Convert every date to YYYY-MM-DD, whatever format it is printed in.\n5. Amounts are plain numbers: no currency symbols, no thousands separators (1,286.01 -> 1286.01).\n6. total = the final amount due exactly as printed. Do NOT recalculate or correct it, even if it looks wrong.\n7. If tax is printed as $0.00, return 0. If no tax line exists at all, return null.\n8. currency: 3-letter code. If only a $ sign is shown and the address is in the US, use USD.\n9. line_items_summary: one short line, e.g. \"Copy paper, toner, sticky notes\".\n10. category: pick EXACTLY ONE of these, spelled exactly as written:\n    Office Supplies | Software & Subscriptions | Utilities & Internet | Professional Services | Marketing & Creative | Meals & Catering | Shipping & Courier | Facilities & Cleaning | Equipment | Other\n    Base it on what was bought, not on the vendor's name alone. Use Other if nothing fits.\n11. confidence: low if the text is garbled or key fields are unclear."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "6574d3d6-d85e-404f-93ec-0d97da285654",
+      "name": "AI Extract Invoice Fields",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1232,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseFormat": "json_object",
+          "temperature": 0,
+          "maxRetries": 2
+        }
+      },
+      "id": "4f33f529-44fd-4f01-ba89-d0a6d56ee5c2",
+      "name": "OpenRouter Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        160
+      ],
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// AI READS, CODE CHECKS.\n// Nothing the AI returns is trusted until it passes these rules.\nconst APPROVAL_THRESHOLD = 500;   // USD. Approval needed when total > this.\nconst EXPECTED_CURRENCY = 'USD';\nconst CATEGORIES = ['Office Supplies','Software & Subscriptions','Utilities & Internet','Professional Services','Marketing & Creative','Meals & Catering','Shipping & Courier','Facilities & Cleaning','Equipment','Other'];\n\nconst intake = $('Ready for AI Extraction').item;\nconst src = intake.json;\n// The PDF file itself: taken from Normalize Intake, the one node that always carries it.\nconst pdfFile = $('Normalize Intake').item.binary;\nconst pdfText = (src.invoice_text || '');\nconst errors = [];\n\n// 1. Read the AI's answer.\n// In JSON mode n8n usually hands us parsed fields directly ($json.vendor_name...).\n// If it ever arrives as raw text instead, parse it (and strip ```json fences).\nlet ai = {};\nif ($json && typeof $json.text === 'string') {\n  try {\n    ai = JSON.parse($json.text.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim());\n  } catch (e) {\n    errors.push('AI response was not valid JSON');\n  }\n} else if ($json && typeof $json.text === 'object' && $json.text !== null) {\n  ai = $json.text;\n} else if ($json && ('vendor_name' in $json || 'total' in $json)) {\n  ai = $json;\n} else {\n  errors.push('AI returned no usable data');\n}\n\nconst toNum = v => (v === null || v === undefined || v === '') ? null\n  : (typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.\\-]/g, '')));\nconst clean = v => (v === null || v === undefined || String(v).trim() === '' || String(v).toLowerCase() === 'null') ? null : String(v).trim();\n\nconst vendor   = clean(ai.vendor_name);\nconst invNo    = clean(ai.invoice_number);\nconst invDate  = clean(ai.invoice_date);\nconst dueDate  = clean(ai.due_date);\nconst currency = clean(ai.currency);\nconst subtotal = toNum(ai.subtotal);\nconst tax      = toNum(ai.tax);\nconst total    = toNum(ai.total);\n// Category: must be one of our fixed list. Anything else becomes 'Other' (not a failure, just less precise).\nconst rawCat   = clean(ai.category);\nconst category = CATEGORIES.includes(rawCat) ? rawCat : 'Other';\n\n// 2. Required fields\nif (!vendor)  errors.push('Missing vendor name');\nif (!invNo)   errors.push('Missing invoice number');\nif (!invDate) errors.push('Missing invoice date');\nif (total === null || isNaN(total)) errors.push('Missing total');\n\n// 3. Math: subtotal + tax must equal total (1-cent tolerance)\nif (subtotal !== null && total !== null && !isNaN(total)) {\n  const expected = Math.round((subtotal + (tax || 0)) * 100) / 100;\n  if (Math.abs(expected - total) > 0.01) {\n    errors.push(`Math error: subtotal ${subtotal.toFixed(2)} + tax ${(tax || 0).toFixed(2)} = ${expected.toFixed(2)}, but invoice total is ${total.toFixed(2)}`);\n  }\n} else if (subtotal === null) {\n  errors.push('Missing subtotal (cannot verify math)');\n}\nif (total !== null && total <= 0) errors.push('Total must be greater than 0');\n\n// 4. Date sanity\nconst today = $now.setZone('Asia/Manila').toISODate();\nconst isValidDate = d => /^\\d{4}-\\d{2}-\\d{2}$/.test(d) && DateTime.fromISO(d).isValid;\nif (invDate && !isValidDate(invDate)) errors.push(`Invoice date not a valid date: ${invDate}`);\nif (invDate && isValidDate(invDate) && invDate > today) errors.push(`Invoice date ${invDate} is in the future`);\nif (invDate && isValidDate(invDate) && invDate < DateTime.fromISO(today).minus({ years: 1 }).toISODate()) errors.push(`Invoice date ${invDate} is over a year old`);\nif (dueDate && invDate && isValidDate(dueDate) && isValidDate(invDate) && dueDate < invDate) errors.push('Due date is before invoice date');\n\n// 5. Currency\nif (currency && currency.toUpperCase() !== EXPECTED_CURRENCY) errors.push(`Unexpected currency: ${currency}`);\n\n// 6. Hallucination guard: AI values must actually appear in the PDF text\nconst textNoSpaces = pdfText.replace(/\\s+/g, '');\nif (invNo && !textNoSpaces.includes(invNo.replace(/\\s+/g, ''))) errors.push(`AI invoice number \"${invNo}\" not found in PDF text`);\nif (total !== null && !isNaN(total)) {\n  const withCommas = total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n  if (!pdfText.includes(withCommas) && !pdfText.includes(total.toFixed(2))) errors.push(`AI total ${total.toFixed(2)} not found in PDF text`);\n}\n\n// 7. Keys for later steps\nconst normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst duplicateKey = (vendor && invNo) ? `${normalize(vendor)}|${normalize(invNo)}` : '';\n// Unique per invoice, even when several arrive in the same run\nconst suffix = Math.random().toString(36).slice(2, 6).toUpperCase();\n\nreturn {\n  json: {\n    record_id: `R-${$now.setZone('Asia/Manila').toFormat('yyyyLLdd-HHmmss')}-${suffix}`,\n    received_at: src.received_at,\n    source: src.source,\n    sender: src.sender,\n    file_name: src.file_name,\n    email_message_id: src.email_message_id,\n    submitter_notes: src.submitter_notes,\n    vendor_name: vendor,\n    invoice_number: invNo,\n    invoice_date: invDate,\n    due_date: dueDate,\n    currency: currency ? currency.toUpperCase() : null,\n    subtotal,\n    tax,\n    total,\n    category,\n    line_items_summary: clean(ai.line_items_summary),\n    ai_confidence: clean(ai.confidence) || 'unknown',\n    duplicate_key: duplicateKey,\n    validation_status: errors.length ? 'Failed' : 'Passed',\n    validation_errors: errors.join('; '),\n    approval_required: total !== null && total > APPROVAL_THRESHOLD\n  },\n  binary: pdfFile\n};"
+      },
+      "id": "5d7f1e8c-11c7-4834-87d2-364d75ceb995",
+      "name": "Validate Invoice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pv1",
+              "leftValue": "={{ $json.validation_status }}",
+              "rightValue": "Passed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "64822ba2-b376-4c88-bcba-b2802867cacb",
+      "name": "Passed Validation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1728,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ns1",
+              "name": "status",
+              "value": "Validated",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "cf4c8f61-7c32-49eb-b487-ac32231bbc7e",
+      "name": "Passed: Next = Duplicate Check",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1968,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fv1",
+              "name": "status",
+              "value": "Needs Review",
+              "type": "string"
+            },
+            {
+              "id": "fv2",
+              "name": "review_reason",
+              "value": "={{ $json.validation_errors }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "b0572a76-7de3-46a1-941f-9cd9099b7e3d",
+      "name": "Flag: Failed Validation",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1968,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. AI reads, code checks\n**AI Extract** (gpt-4.1-mini, temperature 0, JSON mode) turns text into fields. It must return null instead of guessing.\n\n**Validate Invoice** trusts nothing: required fields, subtotal + tax = total, dates, currency, and checks the AI's invoice # and total really appear in the PDF text.",
+        "height": 220,
+        "width": 680,
+        "color": 4
+      },
+      "id": "d67bbc3c-fe73-44a8-8073-c1a1f5b36721",
+      "name": "Note: AI + Validation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1184,
+        -256
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_INVOICE_REGISTER_SHEET_ID",
+          "cachedResultName": "Invoice Register"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": 0,
+          "cachedResultName": "Untitled",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_INVOICE_REGISTER_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "c036b0d3-f1ac-45ea-8d41-c6b10d0d5fb5",
+      "name": "Read Invoice Register",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2208,
+        -96
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Is this invoice already in the Register?\n// Duplicate = same vendor + same invoice number (the duplicate_key),\n// where the earlier row is still 'live' (not rejected / flagged / itself a duplicate).\nconst LIVE_STATUSES = ['Approved (auto)', 'Awaiting Approval', 'Approved', 'Paid'];\n\nconst existing = {};\nfor (const r of $input.all().map(i => i.json)) {\n  if (r && r.duplicate_key && LIVE_STATUSES.includes(String(r.status || ''))) {\n    existing[String(r.duplicate_key)] = r.record_id || `row ${r.row_number}`;\n  }\n}\n\n// Also catch the same invoice arriving twice in ONE run (e.g. two emails at once)\nconst seenThisRun = {};\n\nreturn $('Passed: Next = Duplicate Check').all().map(item => {\n  const key = item.json.duplicate_key;\n  let duplicateOf = '';\n  if (key && existing[key]) duplicateOf = existing[key];\n  else if (key && seenThisRun[key]) duplicateOf = seenThisRun[key];\n  if (key && !duplicateOf) seenThisRun[key] = item.json.record_id;\n\n  return {\n    json: { ...item.json, is_duplicate: !!duplicateOf, duplicate_of: duplicateOf },\n    binary: item.binary\n  };\n});"
+      },
+      "id": "76953b07-fa0e-4463-9b6e-e8dbf257167c",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dup1",
+              "leftValue": "={{ $json.is_duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4b4f776b-2403-4008-a529-6d36203cccf1",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2688,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fd1",
+              "name": "status",
+              "value": "Duplicate",
+              "type": "string"
+            },
+            {
+              "id": "fd2",
+              "name": "approval_status",
+              "value": "N/A",
+              "type": "string"
+            },
+            {
+              "id": "fd3",
+              "name": "review_reason",
+              "value": "=Duplicate of {{ $json.duplicate_of }} (same vendor + invoice number). Not paid twice.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "752697c2-30ef-4b4d-b02d-cd5d4da5a8b1",
+      "name": "Flag: Duplicate",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2928,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sa1",
+              "name": "status",
+              "value": "={{ $json.approval_required ? 'Awaiting Approval' : 'Approved (auto)' }}",
+              "type": "string"
+            },
+            {
+              "id": "sa2",
+              "name": "approval_status",
+              "value": "={{ $json.approval_required ? 'Pending' : 'Auto-approved (under $500)' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "c3a9bb18-07ba-417c-978f-ede8f002b7ef",
+      "name": "Set Approval Status",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        3168,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_INVOICE_REGISTER_SHEET_ID",
+          "cachedResultName": "Invoice Register"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": 0,
+          "cachedResultName": "Untitled",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_INVOICE_REGISTER_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "record_id": "={{ $('Prepare Filing').item.json.record_id || ('R-' + $now.setZone('Asia/Manila').toFormat('yyyyLLdd-HHmmss') + '-SCAN') }}",
+            "received_at": "={{ $('Prepare Filing').item.json.received_at ?? '' }}",
+            "source": "={{ $('Prepare Filing').item.json.source ?? '' }}",
+            "sender": "={{ $('Prepare Filing').item.json.sender ?? '' }}",
+            "file_name": "={{ $('Prepare Filing').item.json.file_name ?? '' }}",
+            "vendor_name": "={{ $('Prepare Filing').item.json.vendor_name ?? '' }}",
+            "invoice_number": "={{ $('Prepare Filing').item.json.invoice_number ?? '' }}",
+            "invoice_date": "={{ $('Prepare Filing').item.json.invoice_date ?? '' }}",
+            "due_date": "={{ $('Prepare Filing').item.json.due_date ?? '' }}",
+            "currency": "={{ $('Prepare Filing').item.json.currency ?? '' }}",
+            "subtotal": "={{ $('Prepare Filing').item.json.subtotal ?? '' }}",
+            "tax": "={{ $('Prepare Filing').item.json.tax ?? '' }}",
+            "total": "={{ $('Prepare Filing').item.json.total ?? '' }}",
+            "category": "={{ $('Prepare Filing').item.json.category ?? '' }}",
+            "duplicate_key": "={{ $('Prepare Filing').item.json.duplicate_key ?? '' }}",
+            "validation_status": "={{ $('Prepare Filing').item.json.validation_status ?? 'Not run (no readable text)' }}",
+            "validation_errors": "={{ $('Prepare Filing').item.json.validation_errors ?? '' }}",
+            "approval_required": "={{ $('Prepare Filing').item.json.approval_required === undefined ? '' : ($('Prepare Filing').item.json.approval_required ? 'Yes' : 'No') }}",
+            "approval_status": "={{ $('Prepare Filing').item.json.approval_status ?? 'N/A' }}",
+            "approved_by": "={{ $('Prepare Filing').item.json.approved_by ?? '' }}",
+            "decided_at": "={{ $('Prepare Filing').item.json.decided_at ?? '' }}",
+            "drive_file_url": "={{ $json.webViewLink ?? '' }}",
+            "status": "={{ $('Prepare Filing').item.json.status ?? '' }}",
+            "notes": "={{ [$('Prepare Filing').item.json.review_reason, $('Prepare Filing').item.json.submitter_notes, ($json.webViewLink ? '' : 'Drive upload failed – PDF not filed')].filter(Boolean).join(' | ') }}"
+          },
+          "schema": [
+            {
+              "id": "record_id",
+              "displayName": "record_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_name",
+              "displayName": "file_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "vendor_name",
+              "displayName": "vendor_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_date",
+              "displayName": "invoice_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "due_date",
+              "displayName": "due_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "subtotal",
+              "displayName": "subtotal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tax",
+              "displayName": "tax",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "duplicate_key",
+              "displayName": "duplicate_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "validation_status",
+              "displayName": "validation_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "validation_errors",
+              "displayName": "validation_errors",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approval_required",
+              "displayName": "approval_required",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approval_status",
+              "displayName": "approval_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approved_by",
+              "displayName": "approved_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decided_at",
+              "displayName": "decided_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "drive_file_url",
+              "displayName": "drive_file_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "6a88dd5b-5baf-49ed-8b44-1dddb7f469bd",
+      "name": "Log to Invoice Register",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        4080,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 4. Duplicate check + Register\n**Duplicate** = same vendor + invoice # as a live row already in the Register (or twice in one run). Flagged, never paid twice.\n\n**Every outcome is logged**: auto-approved, approved, rejected, duplicate, failed validation, scanned. The Register is the audit trail.",
+        "height": 240,
+        "width": 760,
+        "color": 6
+      },
+      "id": "b427ed3a-ac9e-47d3-b335-330bdc02e9d8",
+      "name": "Note: Duplicates + Register",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2192,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "na1",
+              "leftValue": "={{ $json.approval_required }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "41249785-941b-4495-a5ca-717d8e27d9a5",
+      "name": "Needs Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2928,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "approver@yourcompany.com",
+        "subject": "=Approve invoice: {{ $json.vendor_name }} {{ $json.invoice_number }} – {{ Number($json.total).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) }}",
+        "message": "=<h2 style=\"margin:0 0 8px\">Invoice approval needed</h2>\n<p style=\"margin:0 0 12px\">This invoice is over the <b>$500</b> approval limit. All automated checks passed (required fields, math, dates, duplicate check).</p>\n<table cellpadding=\"6\" style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px\">\n<tr><td><b>Vendor</b></td><td>{{ $json.vendor_name }}</td></tr>\n<tr><td><b>Invoice #</b></td><td>{{ $json.invoice_number }}</td></tr>\n<tr><td><b>Invoice date</b></td><td>{{ $json.invoice_date }}</td></tr>\n<tr><td><b>Due date</b></td><td>{{ $json.due_date || '—' }}</td></tr>\n<tr><td><b>Category</b></td><td>{{ $json.category }}</td></tr>\n<tr><td><b>For</b></td><td>{{ $json.line_items_summary || '—' }}</td></tr>\n<tr><td><b>Subtotal</b></td><td>{{ Number($json.subtotal).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) }}</td></tr>\n<tr><td><b>Tax</b></td><td>{{ Number($json.tax || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) }}</td></tr>\n<tr><td><b>TOTAL</b></td><td><b>{{ Number($json.total).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) }}</b></td></tr>\n<tr><td><b>Submitted by</b></td><td>{{ $json.sender }} (via {{ $json.source }})</td></tr>\n<tr><td><b>Record ID</b></td><td>{{ $json.record_id }}</td></tr>\n</table>\n<p style=\"color:#666;font-size:12px\">No response within 3 days = moved to Needs Review.</p>",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "disapproveLabel": "Reject"
+          }
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "resumeAmount": 3,
+              "resumeUnit": "days"
+            }
+          },
+          "appendAttribution": false
+        }
+      },
+      "id": "9f5746ea-55c2-4326-81ee-543d2ca7b1e6",
+      "name": "Request Approval (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3168,
+        -96
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Turn the approver's click into audit fields.\n// The Gmail node only returns { data: { approved, respondedAt } },\n// so we pull the invoice data + PDF back from the node before it.\nconst APPROVER = 'approver@yourcompany.com';\nconst original = $('Needs Approval?').item;\nconst d = ($json && $json.data) || {};\n\nlet status, approvalStatus, approvedBy = '', reason = '';\nif (d.approved === true) {\n  status = 'Approved'; approvalStatus = 'Approved'; approvedBy = APPROVER;\n} else if (d.approved === false) {\n  status = 'Rejected'; approvalStatus = 'Rejected'; approvedBy = APPROVER;\n  reason = 'Rejected by approver';\n} else {\n  status = 'Needs Review'; approvalStatus = 'No response (timed out)';\n  reason = 'Approval request timed out after 3 days';\n}\n\nreturn {\n  json: {\n    ...original.json,\n    status,\n    approval_status: approvalStatus,\n    approved_by: approvedBy,\n    decided_at: d.respondedAt || $now.toISO(),\n    review_reason: reason\n  },\n  binary: original.binary\n};"
+      },
+      "id": "2c975cd1-babf-4647-9ec4-848647b772d5",
+      "name": "Record Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3408,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "pf1",
+              "name": "drive_folder_id",
+              "value": "={{ ['Approved (auto)', 'Approved'].includes($json.status) ? 'YOUR_PROCESSED_FOLDER_ID' : 'YOUR_NEEDS_REVIEW_FOLDER_ID' }}",
+              "type": "string"
+            },
+            {
+              "id": "pf2",
+              "name": "drive_folder_name",
+              "value": "={{ ['Approved (auto)', 'Approved'].includes($json.status) ? 'Processed' : 'Needs Review' }}",
+              "type": "string"
+            },
+            {
+              "id": "pf3",
+              "name": "drive_file_name",
+              "value": "={{ $json.vendor_name ? [ ($json.invoice_date || $now.setZone('Asia/Manila').toISODate()), $json.vendor_name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, ''), ($json.invoice_number || 'NO-NUMBER').replace(/[^A-Za-z0-9-]+/g, ''), ($json.status === 'Duplicate' ? 'DUPLICATE' : ''), ($json.status === 'Rejected' ? 'REJECTED' : '') ].filter(Boolean).join('_') + '.pdf' : $now.setZone('Asia/Manila').toISODate() + '_REVIEW_' + ($json.file_name || 'invoice.pdf') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "id": "4babe6f8-0f49-42e8-82d2-d5e1ea668459",
+      "name": "Prepare Filing",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        3728,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.drive_file_name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive",
+          "cachedResultName": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.drive_folder_id }}"
+        },
+        "options": {}
+      },
+      "id": "1acc41e3-c911-4cab-a68e-40e6a60d50ca",
+      "name": "File PDF to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3904,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 5. Approval + filing\n**Over $500** → Gmail Send-and-Wait to the approver (Approve / Reject). The run pauses until clicked; no answer in 3 days = Needs Review.\n\n**Filing**: approved → `Processed`, everything else → `Needs Review`, renamed `date_Vendor_Invoice#.pdf`. The Drive link is written to the Register.\n\nApprover email is set in **Request Approval** and **Record Decision**.",
+        "height": 260,
+        "width": 760,
+        "color": 3
+      },
+      "id": "2438899d-0794-4209-82d0-3fed02662bde",
+      "name": "Note: Approval + Filing",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2992,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ce1",
+              "leftValue": "={{ $('Prepare Filing').item.json.email_message_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cdd40e3b-43b0-40ec-aeea-2ab6b29b4694",
+      "name": "Came by Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4368,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Prepare Filing').item.json.email_message_id }}",
+        "labelIds": [
+          "YOUR_INVOICE_PROCESSED_LABEL_ID"
+        ]
+      },
+      "id": "a22dc4e3-05ee-4ca5-bf39-bd7b4f64459e",
+      "name": "Label Email as Processed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        4608,
+        -16
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail (Invoice Automation)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Upload Invoice Form": {
+      "main": [
+        [
+          {
+            "node": "Normalize Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Intake": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Watch Invoice Inbox": {
+      "main": [
+        [
+          {
+            "node": "Normalize Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Has Readable Text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Readable Text?": {
+      "main": [
+        [
+          {
+            "node": "Ready for AI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag: Scanned / No Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready for AI Extraction": {
+      "main": [
+        [
+          {
+            "node": "AI Extract Invoice Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Extract Invoice Fields",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract Invoice Fields": {
+      "main": [
+        [
+          {
+            "node": "Validate Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Invoice": {
+      "main": [
+        [
+          {
+            "node": "Passed Validation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Passed Validation?": {
+      "main": [
+        [
+          {
+            "node": "Passed: Next = Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag: Failed Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Passed: Next = Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Read Invoice Register",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Invoice Register": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Flag: Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Needs Approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Approval?": {
+      "main": [
+        [
+          {
+            "node": "Request Approval (Gmail)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Approval Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Approval (Gmail)": {
+      "main": [
+        [
+          {
+            "node": "Record Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Decision": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Approval Status": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag: Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag: Failed Validation": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag: Scanned / No Text": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Filing": {
+      "main": [
+        [
+          {
+            "node": "File PDF to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File PDF to Drive": {
+      "main": [
+        [
+          {
+            "node": "Log to Invoice Register",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Invoice Register": {
+      "main": [
+        [
+          {
+            "node": "Came by Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Came by Email?": {
+      "main": [
+        [
+          {
+            "node": "Label Email as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timeSavedPerExecution": 8
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "name": "Invoice Processing – Error Alerts",
+  "nodes": [
+    {
+      "id": "f13c7c24-5db6-4834-8029-8e5818791894",
+      "name": "When Main Workflow Fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "1d540713-c299-4eb1-9791-6568ba095e1e",
+      "name": "Build Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "include": "all",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "failed_node",
+              "value": "={{ $json.execution?.lastNodeExecuted || $json.trigger?.error?.node?.name || 'Unknown node' }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "error_message",
+              "value": "={{ $json.execution?.error?.message || $json.trigger?.error?.message || 'No message' }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "execution_url",
+              "value": "={{ $json.execution?.url || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "likely_fix",
+              "value": "={{ (() => { const m = String($json.execution?.error?.message || $json.trigger?.error?.message || '').toLowerCase(); if (m.includes('invalid_grant') || m.includes('token') || m.includes('401') || m.includes('unauthorized')) return 'Google sign-in has expired (Testing mode does this about every 7 days). Fix: n8n > Overview > Credentials > open the Gmail / Google Sheets / Google Drive (Invoice Automation) credential > Sign in with Google.'; if (m.includes('has not been used') || m.includes('disabled')) return 'A Google API is switched off. Fix: Google Cloud > APIs & Services > Library > enable the API named in the error.'; if (m.includes('openrouter') || m.includes('402') || m.includes('credit') || m.includes('rate limit') || m.includes('429')) return 'AI provider problem (credits or rate limit). Fix: check your OpenRouter balance and usage, then re-run the execution.'; if (m.includes('forbidden') || m.includes('403')) return 'Permission denied. Open the failed execution and read the full error details for the exact cause.'; return 'Open the failed execution (link above) and read the error on the red node.'; })() }}",
+              "type": "string"
+            },
+            {
+              "id": "a5",
+              "name": "failed_at",
+              "value": "={{ $now.setZone('Asia/Manila').toFormat('yyyy-LL-dd HH:mm') }} (Manila)",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b8082503-6bb4-4077-bb2c-caa2f31c3e55",
+      "name": "Email Failure Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "authentication": "oAuth2",
+        "sendTo": "approver@yourcompany.com",
+        "subject": "=⚠️ Invoice automation failed at \"{{ $json.failed_node }}\"",
+        "emailType": "html",
+        "message": "=<h2 style=\"margin:0 0 8px;color:#b00020\">Invoice automation failed</h2>\n<p style=\"margin:0 0 12px\">An invoice may not have been processed. Nothing is lost: the original email or form submission is still there, and the run can be retried.</p>\n<table cellpadding=\"6\" style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px\">\n<tr><td><b>Workflow</b></td><td>{{ $json.workflow?.name }}</td></tr>\n<tr><td><b>Failed step</b></td><td>{{ $json.failed_node }}</td></tr>\n<tr><td><b>When</b></td><td>{{ $json.failed_at }}</td></tr>\n<tr><td><b>Error</b></td><td><code>{{ $json.error_message }}</code></td></tr>\n<tr><td><b>Likely fix</b></td><td>{{ $json.likely_fix }}</td></tr>\n</table>\n<p><a href=\"{{ $json.execution_url }}\">Open the failed run in n8n</a></p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail (Invoice Automation)"
+        }
+      }
+    },
+    {
+      "id": "bcefcedc-33bd-4712-87e0-a272882b83ab",
+      "name": "Sticky Note 5ea02a94",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ],
+      "parameters": {
+        "content": "## Error alerts\nRuns automatically whenever **Invoice Processing – Main** fails (production runs only).\nEmails which step failed, the error, a plain-English likely fix, and a link to the run.",
+        "color": 2
+      }
+    }
+  ],
+  "connections": {
+    "When Main Workflow Fails": {
+      "main": [
+        [
+          {
+            "node": "Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert": {
+      "main": [
+        [
+          {
+            "node": "Email Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
